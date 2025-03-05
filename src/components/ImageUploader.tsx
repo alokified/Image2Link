@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 
 export function ImageUploader() {
   const [uploading, setUploading] = useState(false);
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
   const [images, setImages] = useState<Array<{ id: string; url: string; filename: string }>>([]);
 
   useEffect(() => {
@@ -29,34 +29,30 @@ export function ImageUploader() {
     }
   };
 
-  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (!isSupabaseConfigured()) {
-      toast.error('Please connect to Supabase first');
-      return;
-    }
-
+  const uploadImage = async (file: File) => {
     try {
-      setUploading(true);
-      
-      const file = event.target.files?.[0];
-      if (!file) return;
-
       // Validate file type
       if (!file.type.startsWith('image/')) {
-        toast.error('Please upload an image file');
-        return;
+        throw new Error(`${file.name} is not an image file`);
       }
 
       // Validate file size (max 5MB)
       if (file.size > 5 * 1024 * 1024) {
-        toast.error('File size must be less than 5MB');
-        return;
+        throw new Error(`${file.name} exceeds 5MB size limit`);
       }
 
       const fileName = `${Date.now()}-${file.name}`;
       const { data, error } = await supabase.storage
         .from('images')
-        .upload(fileName, file);
+        .upload(fileName, file, {
+          onUploadProgress: (progress) => {
+            const percentage = (progress.loaded / progress.total) * 100;
+            setUploadProgress(prev => ({
+              ...prev,
+              [fileName]: Math.round(percentage)
+            }));
+          }
+        });
 
       if (error) throw error;
 
@@ -76,14 +72,60 @@ export function ImageUploader() {
 
       if (dbError) throw dbError;
 
-      setImageUrl(publicUrl);
-      toast.success('Image uploaded successfully!');
-      fetchImages(); // Refresh the images list
+      return publicUrl;
     } catch (error) {
-      console.error('Error uploading image:', error);
-      toast.error('Failed to upload image');
+      throw error;
+    }
+  };
+
+  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isSupabaseConfigured()) {
+      toast.error('Please connect to Supabase first');
+      return;
+    }
+
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
+
+    setUploading(true);
+    setUploadProgress({});
+
+    try {
+      const uploadPromises = files.map(file => uploadImage(file));
+      
+      // Show initial upload toast
+      const uploadToast = toast.loading(
+        `Uploading ${files.length} ${files.length === 1 ? 'image' : 'images'}...`
+      );
+
+      // Upload all images concurrently
+      const results = await Promise.allSettled(uploadPromises);
+
+      // Count successful and failed uploads
+      const successful = results.filter(result => result.status === 'fulfilled').length;
+      const failed = results.filter(result => result.status === 'rejected').length;
+
+      // Update toast with final status
+      if (failed === 0) {
+        toast.success(`Successfully uploaded ${successful} ${successful === 1 ? 'image' : 'images'}`, {
+          id: uploadToast
+        });
+      } else {
+        toast.error(
+          `${successful} uploaded, ${failed} failed`,
+          { id: uploadToast }
+        );
+      }
+
+      // Refresh the images list
+      fetchImages();
+    } catch (error) {
+      console.error('Error uploading images:', error);
+      toast.error('Failed to upload images');
     } finally {
       setUploading(false);
+      // Clear the file input
+      event.target.value = '';
     }
   };
 
@@ -116,7 +158,7 @@ export function ImageUploader() {
         <div className="space-y-6">
           <div className="text-center">
             <h2 className="text-2xl font-bold text-gray-800">Image Uploader</h2>
-            <p className="mt-2 text-gray-600">Upload your images and get shareable links</p>
+            <p className="mt-2 text-gray-600">Upload multiple images at once and get shareable links</p>
           </div>
 
           <div className="relative">
@@ -124,6 +166,7 @@ export function ImageUploader() {
               type="file"
               onChange={handleUpload}
               accept="image/*"
+              multiple
               className="hidden"
               id="file-upload"
               disabled={uploading}
@@ -136,21 +179,32 @@ export function ImageUploader() {
               <div className="flex flex-col items-center space-y-2">
                 <Upload className="w-8 h-8 text-blue-500" />
                 <span className="text-sm text-gray-600">
-                  {uploading ? 'Uploading...' : 'Click to upload an image'}
+                  {uploading ? 'Uploading...' : 'Click to upload images'}
+                </span>
+                <span className="text-xs text-gray-500">
+                  Supports multiple images (max 5MB each)
                 </span>
               </div>
             </label>
           </div>
 
-          {imageUrl && (
-            <div className="space-y-4">
-              <div className="relative aspect-video rounded-lg overflow-hidden bg-gray-100">
-                <img
-                  src={imageUrl}
-                  alt="Uploaded preview"
-                  className="w-full h-full object-contain"
-                />
-              </div>
+          {/* Upload Progress */}
+          {Object.entries(uploadProgress).length > 0 && (
+            <div className="space-y-2">
+              {Object.entries(uploadProgress).map(([filename, progress]) => (
+                <div key={filename} className="text-sm">
+                  <div className="flex justify-between mb-1">
+                    <span className="text-gray-700">{filename}</span>
+                    <span className="text-gray-500">{progress}%</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-1.5">
+                    <div
+                      className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
