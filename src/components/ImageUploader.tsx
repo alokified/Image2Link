@@ -138,6 +138,15 @@ export function ImageUploader() {
 
     setDeleting(image.id);
     try {
+      // First delete from database to trigger cascade
+      const { error: dbError } = await supabase
+        .from('images')
+        .delete()
+        .eq('id', image.id);
+
+      if (dbError) throw dbError;
+
+      // Then delete from storage
       const urlParts = image.url.split('/');
       const filename = urlParts[urlParts.length - 1];
 
@@ -145,14 +154,9 @@ export function ImageUploader() {
         .from('images')
         .remove([filename]);
 
-      if (storageError) throw storageError;
-
-      const { error: dbError } = await supabase
-        .from('images')
-        .delete()
-        .eq('id', image.id);
-
-      if (dbError) throw dbError;
+      if (storageError) {
+        console.warn('Storage deletion failed, but database record was removed:', storageError);
+      }
 
       setImages(images.filter(img => img.id !== image.id));
       toast.success('Image deleted successfully');
@@ -174,26 +178,27 @@ export function ImageUploader() {
     if (!confirmDelete) return;
 
     try {
-      // Get all filenames from the URLs
-      const filenames = images.map(image => {
-        const urlParts = image.url.split('/');
-        return urlParts[urlParts.length - 1];
-      });
-
-      // Delete all files from storage
-      const { error: storageError } = await supabase.storage
-        .from('images')
-        .remove(filenames);
-
-      if (storageError) throw storageError;
-
-      // Delete all records from the database
+      // First delete all records from database
       const { error: dbError } = await supabase
         .from('images')
         .delete()
         .in('id', images.map(img => img.id));
 
       if (dbError) throw dbError;
+
+      // Then delete all files from storage
+      const filenames = images.map(image => {
+        const urlParts = image.url.split('/');
+        return urlParts[urlParts.length - 1];
+      });
+
+      const { error: storageError } = await supabase.storage
+        .from('images')
+        .remove(filenames);
+
+      if (storageError) {
+        console.warn('Some storage files may not have been deleted:', storageError);
+      }
 
       setImages([]);
       setShowDeleteModal(false);
