@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Copy, ExternalLink, AlertCircle } from 'lucide-react';
+import { Upload, Copy, ExternalLink, AlertCircle, Trash2, Download } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import toast from 'react-hot-toast';
 
@@ -7,6 +7,7 @@ export function ImageUploader() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
   const [images, setImages] = useState<Array<{ id: string; url: string; filename: string }>>([]);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   useEffect(() => {
     fetchImages();
@@ -138,6 +139,62 @@ export function ImageUploader() {
     }
   };
 
+  const handleDelete = async (image: { id: string; url: string; filename: string }) => {
+    if (!confirm('Are you sure you want to delete this image?')) {
+      return;
+    }
+
+    setDeleting(image.id);
+    try {
+      // Extract the filename from the URL
+      const urlParts = image.url.split('/');
+      const filename = urlParts[urlParts.length - 1];
+
+      // Delete from storage
+      const { error: storageError } = await supabase.storage
+        .from('images')
+        .remove([filename]);
+
+      if (storageError) throw storageError;
+
+      // Delete from database
+      const { error: dbError } = await supabase
+        .from('images')
+        .delete()
+        .eq('id', image.id);
+
+      if (dbError) throw dbError;
+
+      // Update local state
+      setImages(images.filter(img => img.id !== image.id));
+      toast.success('Image deleted successfully');
+    } catch (error) {
+      console.error('Error deleting image:', error);
+      toast.error('Failed to delete image');
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  const handleDownload = async (image: { url: string; filename: string }) => {
+    try {
+      const response = await fetch(image.url);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = image.filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast.success('Download started');
+    } catch (error) {
+      console.error('Error downloading image:', error);
+      toast.error('Failed to download image');
+    }
+  };
+
   if (!isSupabaseConfigured()) {
     return (
       <div className="w-full max-w-md p-6 bg-white rounded-xl shadow-lg">
@@ -216,30 +273,50 @@ export function ImageUploader() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {images.map((image) => (
             <div key={image.id} className="space-y-2">
-              <div className="aspect-video rounded-lg overflow-hidden bg-gray-100">
+              <div className="aspect-video rounded-lg overflow-hidden bg-gray-100 relative group">
                 <img
                   src={image.url}
                   alt={image.filename}
                   className="w-full h-full object-cover"
                 />
+                <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all duration-300" />
               </div>
               <div className="flex gap-2">
                 <button
                   onClick={() => copyToClipboard(image.url)}
-                  className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 transition-colors"
+                  className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 transition-colors"
+                  title="Copy Link"
                 >
                   <Copy className="w-4 h-4" />
-                  Copy Link
+                  <span className="hidden sm:inline">Copy Link</span>
+                </button>
+                <button
+                  onClick={() => handleDownload(image)}
+                  className="flex items-center justify-center gap-1 px-2 py-1.5 bg-green-500 text-white text-sm rounded-lg hover:bg-green-600 transition-colors"
+                  title="Download"
+                >
+                  <Download className="w-4 h-4" />
+                  <span className="hidden sm:inline">Download</span>
                 </button>
                 <a
                   href={image.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200 transition-colors"
+                  className="flex items-center justify-center gap-1 px-2 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200 transition-colors"
+                  title="Open"
                 >
                   <ExternalLink className="w-4 h-4" />
-                  Open
+                  <span className="hidden sm:inline">Open</span>
                 </a>
+                <button
+                  onClick={() => handleDelete(image)}
+                  disabled={deleting === image.id}
+                  className="flex items-center justify-center gap-1 px-2 py-1.5 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Delete"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span className="hidden sm:inline">Delete</span>
+                </button>
               </div>
             </div>
           ))}
