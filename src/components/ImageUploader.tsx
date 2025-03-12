@@ -138,7 +138,7 @@ export function ImageUploader() {
 
     setDeleting(image.id);
     try {
-      // First delete from database to trigger cascade
+      // Delete from database - the trigger will handle storage deletion
       const { error: dbError } = await supabase
         .from('images')
         .delete()
@@ -146,19 +146,7 @@ export function ImageUploader() {
 
       if (dbError) throw dbError;
 
-      // Then delete from storage
-      const urlParts = image.url.split('/');
-      const filename = urlParts[urlParts.length - 1];
-
-      const { error: storageError } = await supabase.storage
-        .from('images')
-        .remove([filename]);
-
-      if (storageError) {
-        console.warn('Storage deletion failed, but database record was removed:', storageError);
-      }
-
-      setImages(images.filter(img => img.id !== image.id));
+      setImages(prevImages => prevImages.filter(img => img.id !== image.id));
       toast.success('Image deleted successfully');
     } catch (error) {
       console.error('Error deleting image:', error);
@@ -178,27 +166,13 @@ export function ImageUploader() {
     if (!confirmDelete) return;
 
     try {
-      // First delete all records from database
+      // Delete all records from database - triggers will handle storage deletion
       const { error: dbError } = await supabase
         .from('images')
         .delete()
-        .in('id', images.map(img => img.id));
+        .neq('id', ''); // Delete all records
 
       if (dbError) throw dbError;
-
-      // Then delete all files from storage
-      const filenames = images.map(image => {
-        const urlParts = image.url.split('/');
-        return urlParts[urlParts.length - 1];
-      });
-
-      const { error: storageError } = await supabase.storage
-        .from('images')
-        .remove(filenames);
-
-      if (storageError) {
-        console.warn('Some storage files may not have been deleted:', storageError);
-      }
 
       setImages([]);
       setShowDeleteModal(false);
