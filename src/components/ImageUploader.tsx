@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Copy, ExternalLink, AlertCircle, Trash2, Download } from 'lucide-react';
+import { Upload, Copy, AlertCircle, Trash2, Download, TrashIcon } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import toast from 'react-hot-toast';
 
@@ -8,6 +8,8 @@ export function ImageUploader() {
   const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
   const [images, setImages] = useState<Array<{ id: string; url: string; filename: string }>>([]);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   useEffect(() => {
     fetchImages();
@@ -32,12 +34,10 @@ export function ImageUploader() {
 
   const uploadImage = async (file: File) => {
     try {
-      // Validate file type
       if (!file.type.startsWith('image/')) {
         throw new Error(`${file.name} is not an image file`);
       }
 
-      // Validate file size (max 5MB)
       if (file.size > 5 * 1024 * 1024) {
         throw new Error(`${file.name} exceeds 5MB size limit`);
       }
@@ -61,7 +61,6 @@ export function ImageUploader() {
         .from('images')
         .getPublicUrl(data.path);
 
-      // Save image metadata to database
       const { error: dbError } = await supabase
         .from('images')
         .insert([
@@ -94,19 +93,14 @@ export function ImageUploader() {
     try {
       const uploadPromises = files.map(file => uploadImage(file));
       
-      // Show initial upload toast
       const uploadToast = toast.loading(
         `Uploading ${files.length} ${files.length === 1 ? 'image' : 'images'}...`
       );
 
-      // Upload all images concurrently
       const results = await Promise.allSettled(uploadPromises);
-
-      // Count successful and failed uploads
       const successful = results.filter(result => result.status === 'fulfilled').length;
       const failed = results.filter(result => result.status === 'rejected').length;
 
-      // Update toast with final status
       if (failed === 0) {
         toast.success(`Successfully uploaded ${successful} ${successful === 1 ? 'image' : 'images'}`, {
           id: uploadToast
@@ -118,14 +112,12 @@ export function ImageUploader() {
         );
       }
 
-      // Refresh the images list
       fetchImages();
     } catch (error) {
       console.error('Error uploading images:', error);
       toast.error('Failed to upload images');
     } finally {
       setUploading(false);
-      // Clear the file input
       event.target.value = '';
     }
   };
@@ -146,18 +138,15 @@ export function ImageUploader() {
 
     setDeleting(image.id);
     try {
-      // Extract the filename from the URL
       const urlParts = image.url.split('/');
       const filename = urlParts[urlParts.length - 1];
 
-      // Delete from storage
       const { error: storageError } = await supabase.storage
         .from('images')
         .remove([filename]);
 
       if (storageError) throw storageError;
 
-      // Delete from database
       const { error: dbError } = await supabase
         .from('images')
         .delete()
@@ -165,7 +154,6 @@ export function ImageUploader() {
 
       if (dbError) throw dbError;
 
-      // Update local state
       setImages(images.filter(img => img.id !== image.id));
       toast.success('Image deleted successfully');
     } catch (error) {
@@ -173,6 +161,47 @@ export function ImageUploader() {
       toast.error('Failed to delete image');
     } finally {
       setDeleting(null);
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    if (deletePassword !== '1234567890') {
+      toast.error('Incorrect password');
+      return;
+    }
+
+    const confirmDelete = confirm('Are you sure you want to delete ALL images? This action cannot be undone.');
+    if (!confirmDelete) return;
+
+    try {
+      // Get all filenames from the URLs
+      const filenames = images.map(image => {
+        const urlParts = image.url.split('/');
+        return urlParts[urlParts.length - 1];
+      });
+
+      // Delete all files from storage
+      const { error: storageError } = await supabase.storage
+        .from('images')
+        .remove(filenames);
+
+      if (storageError) throw storageError;
+
+      // Delete all records from the database
+      const { error: dbError } = await supabase
+        .from('images')
+        .delete()
+        .in('id', images.map(img => img.id));
+
+      if (dbError) throw dbError;
+
+      setImages([]);
+      setShowDeleteModal(false);
+      setDeletePassword('');
+      toast.success('All images deleted successfully');
+    } catch (error) {
+      console.error('Error deleting all images:', error);
+      toast.error('Failed to delete all images');
     }
   };
 
@@ -213,10 +242,52 @@ export function ImageUploader() {
     <div className="w-full max-w-4xl space-y-8">
       <div className="p-6 bg-white rounded-xl shadow-lg">
         <div className="space-y-6">
-          <div className="text-center">
-            <h2 className="text-2xl font-bold text-gray-800">Image Uploader</h2>
-            <p className="mt-2 text-gray-600">Upload multiple images at once and get shareable links</p>
+          <div className="flex items-center justify-between">
+            <div className="text-center flex-1">
+              <h2 className="text-2xl font-bold text-gray-800">Image Uploader</h2>
+              <p className="mt-2 text-gray-600">Upload multiple images at once</p>
+            </div>
+            <button
+              onClick={() => setShowDeleteModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+            >
+              <TrashIcon className="w-4 h-4" />
+              Delete All
+            </button>
           </div>
+
+          {showDeleteModal && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white p-6 rounded-lg shadow-xl max-w-md w-full mx-4">
+                <h3 className="text-xl font-bold mb-4">Delete All Images</h3>
+                <p className="text-gray-600 mb-4">Enter password to confirm deletion of all images:</p>
+                <input
+                  type="password"
+                  value={deletePassword}
+                  onChange={(e) => setDeletePassword(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-lg mb-4"
+                  placeholder="Enter password"
+                />
+                <div className="flex justify-end gap-2">
+                  <button
+                    onClick={() => {
+                      setShowDeleteModal(false);
+                      setDeletePassword('');
+                    }}
+                    className="px-4 py-2 text-gray-600 hover:text-gray-800"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDeleteAll}
+                    className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+                  >
+                    Delete All
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="relative">
             <input
@@ -245,7 +316,6 @@ export function ImageUploader() {
             </label>
           </div>
 
-          {/* Upload Progress */}
           {Object.entries(uploadProgress).length > 0 && (
             <div className="space-y-2">
               {Object.entries(uploadProgress).map(([filename, progress]) => (
@@ -267,7 +337,6 @@ export function ImageUploader() {
         </div>
       </div>
 
-      {/* Image Gallery */}
       <div className="p-6 bg-white rounded-xl shadow-lg">
         <h2 className="text-xl font-bold text-gray-800 mb-4">Uploaded Images</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -280,43 +349,30 @@ export function ImageUploader() {
                   className="w-full h-full object-cover"
                 />
                 <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all duration-300" />
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => copyToClipboard(image.url)}
-                  className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 transition-colors"
-                  title="Copy Link"
-                >
-                  <Copy className="w-4 h-4" />
-                  <span className="hidden sm:inline">Copy Link</span>
-                </button>
-                <button
-                  onClick={() => handleDownload(image)}
-                  className="flex items-center justify-center gap-1 px-2 py-1.5 bg-green-500 text-white text-sm rounded-lg hover:bg-green-600 transition-colors"
-                  title="Download"
-                >
-                  <Download className="w-4 h-4" />
-                  <span className="hidden sm:inline">Download</span>
-                </button>
-                <a
-                  href={image.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-1 px-2 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200 transition-colors"
-                  title="Open"
-                >
-                  <ExternalLink className="w-4 h-4" />
-                  <span className="hidden sm:inline">Open</span>
-                </a>
-                <button
-                  onClick={() => handleDelete(image)}
-                  disabled={deleting === image.id}
-                  className="flex items-center justify-center gap-1 px-2 py-1.5 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Delete"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  <span className="hidden sm:inline">Delete</span>
-                </button>
+                <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => copyToClipboard(image.url)}
+                    className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                    title="Copy Link"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => handleDownload(image)}
+                    className="p-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
+                    title="Download"
+                  >
+                    <Download className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(image)}
+                    disabled={deleting === image.id}
+                    className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Delete"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             </div>
           ))}
